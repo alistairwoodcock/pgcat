@@ -1,6 +1,6 @@
 /// Parse the configuration file.
 use arc_swap::ArcSwap;
-use log::{error, info};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserializer, Serializer};
@@ -581,6 +581,12 @@ pub struct Pool {
     pub shard_id_regex: Option<String>,
     pub regex_search_limit: Option<usize>,
 
+    // Database routing: route queries to different pools based on SQL comments
+    pub database_regex: Option<String>,
+    pub allowed_databases: Option<Vec<String>>,
+    #[serde(default)]
+    pub allow_all_databases: bool,
+
     #[serde(default = "Pool::default_default_shard")]
     pub default_shard: DefaultShard,
 
@@ -713,6 +719,7 @@ impl Pool {
         for (option, name) in [
             (&self.shard_id_regex, "shard_id_regex"),
             (&self.sharding_key_regex, "sharding_key_regex"),
+            (&self.database_regex, "database_regex"),
         ] {
             if let Some(regex) = option {
                 if let Err(parse_err) = Regex::new(regex.as_str()) {
@@ -720,6 +727,14 @@ impl Pool {
                     return Err(Error::BadConfig);
                 }
             }
+        }
+
+        // Warn if allow_all_databases is set with allowed_databases
+        if self.allow_all_databases && self.allowed_databases.is_some() {
+            warn!(
+                "allow_all_databases is true but allowed_databases is also set; \
+                 allowed_databases will be ignored"
+            );
         }
 
         if self.query_parser_read_write_splitting && !self.query_parser_enabled {
@@ -804,6 +819,9 @@ impl Default for Pool {
             sharding_key_regex: None,
             shard_id_regex: None,
             regex_search_limit: Some(1000),
+            database_regex: None,
+            allowed_databases: None,
+            allow_all_databases: false,
             default_shard: Self::default_default_shard(),
             auth_query: None,
             auth_query_user: None,
@@ -1526,6 +1544,24 @@ impl Config {
                 }
             }
         };
+
+        // Validate allowed_databases entries exist as configured pools
+        let pool_names: HashSet<&String> = self.pools.keys().collect();
+        for (pool_name, pool) in self.pools.iter() {
+            if !pool.allow_all_databases {
+                if let Some(allowed_dbs) = &pool.allowed_databases {
+                    for allowed_db in allowed_dbs {
+                        if !pool_names.contains(allowed_db) {
+                            error!(
+                                "Pool '{}' has allowed_databases entry '{}' that does not exist",
+                                pool_name, allowed_db
+                            );
+                            return Err(Error::BadConfig);
+                        }
+                    }
+                }
+            }
+        }
 
         for pool in self.pools.values_mut() {
             pool.validate()?;

@@ -174,5 +174,159 @@ module Helpers
         struct.all_databases = [primary, replica0, replica1, replica2]
       end
     end
+
+    # Setup for database routing tests - two separate pools with the same user
+    # This allows testing routing queries from one pool to another
+    def self.multi_pool_setup(pool_mode="transaction", log_level="info")
+      user = {
+        "password" => "sharding_user",
+        "pool_size" => 5,
+        "statement_timeout" => 0,
+        "username" => "sharding_user"
+      }
+
+      pgcat = PgcatProcess.new(log_level)
+      pgcat_cfg = pgcat.current_config
+
+      # Two separate database instances representing different pools
+      main_db = PgInstance.new(5432, user["username"], user["password"], "shard0")
+      analytics_db = PgInstance.new(7432, user["username"], user["password"], "shard1")
+      reporting_db = PgInstance.new(8432, user["username"], user["password"], "shard2")
+
+      # Configure three pools - main_db, analytics_db, and reporting_db
+      pgcat_cfg["pools"] = {
+        "main_db" => {
+          "default_role" => "primary",
+          "pool_mode" => pool_mode,
+          "load_balancing_mode" => "random",
+          "primary_reads_enabled" => false,
+          "query_parser_enabled" => false,
+          "sharding_function" => "pg_bigint_hash",
+          "shards" => {
+            "0" => {
+              "database" => "shard0",
+              "servers" => [["localhost", main_db.port.to_i, "primary"]]
+            }
+          },
+          "users" => { "0" => user }
+        },
+        "analytics_db" => {
+          "default_role" => "primary",
+          "pool_mode" => pool_mode,
+          "load_balancing_mode" => "random",
+          "primary_reads_enabled" => false,
+          "query_parser_enabled" => false,
+          "sharding_function" => "pg_bigint_hash",
+          "shards" => {
+            "0" => {
+              "database" => "shard1",
+              "servers" => [["localhost", analytics_db.port.to_i, "primary"]]
+            }
+          },
+          "users" => { "0" => user }
+        },
+        "reporting_db" => {
+          "default_role" => "primary",
+          "pool_mode" => pool_mode,
+          "load_balancing_mode" => "random",
+          "primary_reads_enabled" => false,
+          "query_parser_enabled" => false,
+          "sharding_function" => "pg_bigint_hash",
+          "shards" => {
+            "0" => {
+              "database" => "shard2",
+              "servers" => [["localhost", reporting_db.port.to_i, "primary"]]
+            }
+          },
+          "users" => { "0" => user }
+        }
+      }
+
+      pgcat_cfg["general"]["port"] = pgcat.port
+      pgcat.update_config(pgcat_cfg)
+      pgcat.start
+      pgcat.wait_until_ready
+
+      OpenStruct.new.tap do |struct|
+        struct.pgcat = pgcat
+        struct.main_db = main_db
+        struct.analytics_db = analytics_db
+        struct.reporting_db = reporting_db
+        struct.all_databases = [main_db, analytics_db, reporting_db]
+      end
+    end
+
+    # Setup for database routing with a user that only exists in main_db
+    # Uses sharding_user (exists in both) and other_user (configured only in main_db pool)
+    def self.multi_pool_setup_with_restricted_user(pool_mode="transaction", log_level="info")
+      shared_user = {
+        "password" => "sharding_user",
+        "pool_size" => 5,
+        "statement_timeout" => 0,
+        "username" => "sharding_user"
+      }
+
+      # This user exists in postgres but we only configure it in main_db pool
+      main_only_user = {
+        "password" => "other_user",
+        "pool_size" => 5,
+        "statement_timeout" => 0,
+        "username" => "other_user"
+      }
+
+      pgcat = PgcatProcess.new(log_level)
+      pgcat_cfg = pgcat.current_config
+
+      main_db = PgInstance.new(5432, shared_user["username"], shared_user["password"], "shard0")
+      analytics_db = PgInstance.new(7432, shared_user["username"], shared_user["password"], "shard1")
+
+      pgcat_cfg["pools"] = {
+        "main_db" => {
+          "default_role" => "primary",
+          "pool_mode" => pool_mode,
+          "load_balancing_mode" => "random",
+          "primary_reads_enabled" => false,
+          "query_parser_enabled" => false,
+          "sharding_function" => "pg_bigint_hash",
+          "shards" => {
+            "0" => {
+              "database" => "shard0",
+              "servers" => [["localhost", main_db.port.to_i, "primary"]]
+            }
+          },
+          "users" => {
+            "0" => shared_user,
+            "1" => main_only_user  # This user only configured in main_db pool
+          }
+        },
+        "analytics_db" => {
+          "default_role" => "primary",
+          "pool_mode" => pool_mode,
+          "load_balancing_mode" => "random",
+          "primary_reads_enabled" => false,
+          "query_parser_enabled" => false,
+          "sharding_function" => "pg_bigint_hash",
+          "shards" => {
+            "0" => {
+              "database" => "shard1",
+              "servers" => [["localhost", analytics_db.port.to_i, "primary"]]
+            }
+          },
+          "users" => { "0" => shared_user }  # other_user not configured here
+        }
+      }
+
+      pgcat_cfg["general"]["port"] = pgcat.port
+      pgcat.update_config(pgcat_cfg)
+      pgcat.start
+      pgcat.wait_until_ready
+
+      OpenStruct.new.tap do |struct|
+        struct.pgcat = pgcat
+        struct.main_db = main_db
+        struct.analytics_db = analytics_db
+        struct.all_databases = [main_db, analytics_db]
+      end
+    end
   end
 end

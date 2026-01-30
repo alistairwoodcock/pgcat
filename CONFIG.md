@@ -401,6 +401,45 @@ example: '/\* sharding_key: (\d+) \*/'
 Allow sharding commands to be passed as statement comments instead of
 separate commands. If these are unset this functionality is disabled.
 
+### database_regex
+```
+path: pools.<pool_name>.database_regex
+default: <UNSET>
+example: '/\* database: (\w+) \*/'
+```
+
+Regex pattern to extract target database/pool name from SQL comments. The first capture
+group should contain the database name. When a query contains a matching comment,
+pgcat will route that query to the specified database pool instead of the client's
+connected pool. The comment should be at the beginning of the query for efficiency
+(pgcat only searches the first N characters, controlled by `regex_search_limit`).
+
+Example usage:
+```sql
+/* database: analytics_db */ SELECT * FROM events WHERE date > '2024-01-01';
+```
+
+### allowed_databases
+```
+path: pools.<pool_name>.allowed_databases
+default: <UNSET>
+example: ["analytics_db", "reporting_db"]
+```
+
+List of database/pool names that this pool's clients are allowed to route queries to
+using `database_regex`. This serves as a security allowlist. The user must exist in
+the target pool with the same username for routing to succeed.
+
+### allow_all_databases
+```
+path: pools.<pool_name>.allow_all_databases
+default: false
+```
+
+When set to `true`, clients can route queries to any configured pool where the user
+exists, ignoring the `allowed_databases` allowlist. Use with care in dynamic systems
+where explicit allowlisting is impractical.
+
 ### sharding_function
 ```
 path: pools.<pool_name>.sharding_function

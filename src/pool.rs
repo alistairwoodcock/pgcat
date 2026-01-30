@@ -9,7 +9,7 @@ use parking_lot::{Mutex, RwLock};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicU64;
@@ -228,6 +228,11 @@ pub struct PoolSettings {
 
     /// Plugins
     pub plugins: Option<Plugins>,
+
+    // Database routing: route queries to different pools based on SQL comments
+    pub database_regex: Option<Regex>,
+    pub allowed_databases: Option<HashSet<String>>,
+    pub allow_all_databases: bool,
 }
 
 impl Default for PoolSettings {
@@ -261,6 +266,9 @@ impl Default for PoolSettings {
             auth_query_user: None,
             auth_query_password: None,
             plugins: None,
+            database_regex: None,
+            allowed_databases: None,
+            allow_all_databases: false,
         }
     }
 }
@@ -588,6 +596,15 @@ impl ConnectionPool {
                             Some(ref plugins) => Some(plugins.clone()),
                             None => config.plugins.clone(),
                         },
+                        database_regex: pool_config
+                            .database_regex
+                            .clone()
+                            .map(|regex| Regex::new(regex.as_str()).unwrap()),
+                        allowed_databases: pool_config
+                            .allowed_databases
+                            .clone()
+                            .map(|dbs| dbs.into_iter().collect()),
+                        allow_all_databases: pool_config.allow_all_databases,
                     }),
                     validated: Arc::new(AtomicBool::new(false)),
                     paused: Arc::new(AtomicBool::new(false)),

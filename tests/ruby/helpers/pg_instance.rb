@@ -103,6 +103,9 @@ class PgInstance
   end
 
   def count_select_1_plus_2
-    with_connection { |c| c.async_exec("SELECT SUM(calls) FROM pg_stat_statements WHERE query LIKE '%SELECT $1 + $2%'")[0]["sum"].to_i }
+    # Match both:
+    # - SELECT $1 + $2 (comment at beginning is stripped)
+    # - SELECT /* ... */ $1 + $2 (comment in middle is preserved)
+    with_connection { |c| c.async_exec("SELECT SUM(calls) FROM pg_stat_statements WHERE query LIKE '%SELECT%$1 + $2%'")[0]["sum"].to_i }
   end
 end
