@@ -581,7 +581,6 @@ pub struct Pool {
     pub shard_id_regex: Option<String>,
     pub regex_search_limit: Option<usize>,
 
-    // Database routing: route queries to different pools based on SQL comments
     pub database_regex: Option<String>,
     pub allowed_databases: Option<Vec<String>>,
     #[serde(default)]

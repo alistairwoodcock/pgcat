@@ -229,7 +229,6 @@ pub struct PoolSettings {
     /// Plugins
     pub plugins: Option<Plugins>,
 
-    // Database routing: route queries to different pools based on SQL comments
     pub database_regex: Option<Regex>,
     pub allowed_databases: Option<HashSet<String>>,
     pub allow_all_databases: bool,

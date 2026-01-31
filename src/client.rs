@@ -935,8 +935,6 @@ where
                 continue;
             }
 
-            // Refresh pool settings before processing custom commands (including database routing)
-            // This ensures config changes take effect immediately for the next query
             pool = self.get_pool().await?;
             query_router.update_pool_settings(&pool.settings);
 
@@ -1068,30 +1066,31 @@ where
             pool = self.get_pool().await?;
             query_router.update_pool_settings(&pool.settings);
 
-            // Check if routing was denied (database not in allowlist)
-            if let Some(routing_error) = query_router.routing_error() {
-                error!("Database routing denied: {}", routing_error);
-                error_response(&mut self.write, routing_error).await?;
-                query_router.clear_routing_error();
-                self.reset_buffered_state();
-                continue;
-            }
-
-            // Check if we need to route to a different database/pool
             let effective_pool = if let Some(target_db) = query_router.database() {
-                match get_pool(target_db, &self.username) {
-                    Some(target_pool) => {
-                        debug!(
-                            "Routing query to target database: {:?}",
+                let allowed = pool.settings.allow_all_databases
+                    || pool
+                        .settings
+                        .allowed_databases
+                        .as_ref()
+                        .map_or(false, |dbs| dbs.contains(target_db));
+
+                if !allowed {
+                    error_response(
+                        &mut self.write,
+                        &format!(
+                            "Target database '{}' not found or user not authorized",
                             target_db
-                        );
-                        target_pool
-                    }
+                        ),
+                    )
+                    .await?;
+                    query_router.clear_database();
+                    self.reset_buffered_state();
+                    continue;
+                }
+
+                match get_pool(target_db, &self.username) {
+                    Some(target_pool) => target_pool,
                     None => {
-                        error!(
-                            "Database routing failed: pool '{}' not found for user '{}'",
-                            target_db, self.username
-                        );
                         error_response(
                             &mut self.write,
                             &format!(

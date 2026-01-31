@@ -89,11 +89,7 @@ pub struct QueryRouter {
     /// Which server should we be talking to.
     active_role: Option<Role>,
 
-    /// Which database/pool to route this query to (for cross-database routing).
     active_database: Option<String>,
-
-    /// Error message when routing was denied (database not in allowlist).
-    routing_error: Option<String>,
 
     /// Should we try to parse queries to route them to replicas or primary automatically
     query_parser_enabled: Option<bool>,
@@ -148,7 +144,6 @@ impl QueryRouter {
             active_shard: None,
             active_role: None,
             active_database: None,
-            routing_error: None,
             query_parser_enabled: None,
             primary_reads_enabled: None,
             pool_settings: PoolSettings::default(),
@@ -222,47 +217,20 @@ impl QueryRouter {
             }
         }
 
-        // Check for database routing regex
         if let Some(database_regex) = &self.pool_settings.database_regex {
-            match code {
-                'P' | 'Q' => {
-                    let seg = cmp::min(len - 5, self.pool_settings.regex_search_limit);
-                    let query_start_index = mem::size_of::<u8>() + mem::size_of::<i32>();
-                    let initial_segment = String::from_utf8_lossy(
-                        &message_buffer[query_start_index..query_start_index + seg],
-                    );
+            if code == 'P' || code == 'Q' {
+                let seg = cmp::min(len - 5, self.pool_settings.regex_search_limit);
+                let query_start_index = mem::size_of::<u8>() + mem::size_of::<i32>();
+                let initial_segment = String::from_utf8_lossy(
+                    &message_buffer[query_start_index..query_start_index + seg],
+                );
 
-                    if let Some(captures) = database_regex.captures(&initial_segment) {
-                        if let Some(db_match) = captures.get(1) {
-                            let target_db = db_match.as_str().to_string();
-
-                            // Check if routing is allowed
-                            let allowed = if self.pool_settings.allow_all_databases {
-                                true
-                            } else if let Some(allowed_dbs) = &self.pool_settings.allowed_databases {
-                                allowed_dbs.contains(&target_db)
-                            } else {
-                                false
-                            };
-
-                            if allowed {
-                                debug!("Setting target database to {:?}", target_db);
-                                self.set_database(Some(target_db));
-                                self.routing_error = None;
-                            } else {
-                                debug!(
-                                    "Database {:?} not in allowed list, routing denied",
-                                    target_db
-                                );
-                                self.routing_error = Some(format!(
-                                    "Target database '{}' not found or user not authorized",
-                                    target_db
-                                ));
-                            }
-                        }
+                if let Some(captures) = database_regex.captures(&initial_segment) {
+                    if let Some(db_match) = captures.get(1) {
+                        debug!("Setting target database to {:?}", db_match.as_str());
+                        self.active_database = Some(db_match.as_str().to_string());
                     }
                 }
-                _ => {}
             }
         }
 
@@ -1291,30 +1259,16 @@ impl QueryRouter {
         self.active_shard = shard;
     }
 
-    /// Get desired database/pool we should be routing to.
     pub fn database(&self) -> Option<&String> {
         self.active_database.as_ref()
     }
 
-    /// Set the target database for routing.
     pub fn set_database(&mut self, database: Option<String>) {
         self.active_database = database;
     }
 
-    /// Clear the database routing state.
     pub fn clear_database(&mut self) {
         self.active_database = None;
-        self.routing_error = None;
-    }
-
-    /// Get the routing error if routing was denied.
-    pub fn routing_error(&self) -> Option<&String> {
-        self.routing_error.as_ref()
-    }
-
-    /// Clear the routing error.
-    pub fn clear_routing_error(&mut self) {
-        self.routing_error = None;
     }
 
     /// Should we attempt to parse queries?
@@ -2416,35 +2370,6 @@ mod test {
     }
 
     #[test]
-    fn test_database_routing_allowlist_rejection() {
-        QueryRouter::setup();
-
-        let pool_settings = PoolSettings {
-            database_regex: Some(Regex::new(r"/\* database: (\w+) \*/").unwrap()),
-            allowed_databases: Some(
-                vec!["analytics_db".to_string()]
-                    .into_iter()
-                    .collect(),
-            ),
-            allow_all_databases: false,
-            ..Default::default()
-        };
-
-        let mut qr = QueryRouter::new();
-        qr.update_pool_settings(&pool_settings);
-
-        // Query with routing to non-allowed database - should be rejected
-        let q1 = simple_query("/* database: unauthorized_db */ SELECT 1");
-        assert!(qr.try_execute_command(&q1).is_none());
-        assert_eq!(qr.active_database, None); // Not set because not allowed
-
-        // Query with routing to allowed database - should work
-        let q2 = simple_query("/* database: analytics_db */ SELECT 1");
-        assert!(qr.try_execute_command(&q2).is_none());
-        assert_eq!(qr.active_database, Some("analytics_db".to_string()));
-    }
-
-    #[test]
     fn test_database_routing_allow_all() {
         QueryRouter::setup();
 
@@ -2486,26 +2411,6 @@ mod test {
 
         // Comment should be ignored when no regex configured
         let q1 = simple_query("/* database: analytics_db */ SELECT 1");
-        assert!(qr.try_execute_command(&q1).is_none());
-        assert_eq!(qr.active_database, None);
-    }
-
-    #[test]
-    fn test_database_routing_empty_allowlist() {
-        QueryRouter::setup();
-
-        let pool_settings = PoolSettings {
-            database_regex: Some(Regex::new(r"/\* database: (\w+) \*/").unwrap()),
-            allowed_databases: Some(std::collections::HashSet::new()), // Empty allowlist
-            allow_all_databases: false,
-            ..Default::default()
-        };
-
-        let mut qr = QueryRouter::new();
-        qr.update_pool_settings(&pool_settings);
-
-        // Should reject all routing when allowlist is empty
-        let q1 = simple_query("/* database: any_db */ SELECT 1");
         assert!(qr.try_execute_command(&q1).is_none());
         assert_eq!(qr.active_database, None);
     }
